@@ -11,75 +11,157 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build and publish release
+  resolve-version:
+    name: Resolve release version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      update_pom: ${{ steps.release.outputs.update_pom }}
+      commit: ${{ steps.commit.outputs.commit }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "25"
           cache: maven
-
       - name: Resolve release version
-        id: version
+        id: release
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" != "branch" ]]; then
+            echo "Releases must be dispatched from a branch." >&2
+            exit 1
+          fi
           current_version="$(mvn --batch-mode --no-transfer-progress -q \
             -DforceStdout help:evaluate -Dexpression=project.version)"
-          if [[ "$current_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-SNAPSHOT$ ]]; then
+          snapshot_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-SNAPSHOT$'
+          release_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if [[ "$current_version" =~ $snapshot_pattern ]]; then
             version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-            mvn --batch-mode --no-transfer-progress \
-              org.codehaus.mojo:versions-maven-plugin:2.18.0:set \
-              -DnewVersion="$version" -DgenerateBackupPoms=false \
-              -DprocessDependencies=false -DprocessPlugins=false
-          elif [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            update_pom=true
+          elif [[ "$current_version" =~ $release_pattern ]]; then
             version="$current_version"
+            update_pom=false
           else
-            echo "Invalid project version: $current_version" >&2
+            echo "Expected a semantic version like 1.2.3-SNAPSHOT, got: $current_version" >&2
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          tag="v$version"
+          remote_tag="$(git ls-remote --refs origin "refs/tags/$tag")"
+          if [[ "$update_pom" == true && -n "$remote_tag" ]] ||
+             [[ "$update_pom" == false && -z "$remote_tag" ]]; then
+            echo "Tag state is inconsistent for $tag." >&2
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "update_pom=$update_pom"
+          } >> "$GITHUB_OUTPUT"
+      - name: Record source commit
+        id: commit
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Run tests
-        run: mvn --batch-mode --no-transfer-progress clean verify
-
-      - name: Build mod
-        run: mvn --batch-mode --no-transfer-progress package -DskipTests
-
-      - name: Commit and tag release
+  package:
+    name: Build release artifact
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-version.outputs.commit }}
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - name: Set release version in POM
+        if: needs.resolve-version.outputs.update_pom == 'true'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          mvn --batch-mode --no-transfer-progress \
+            org.codehaus.mojo:versions-maven-plugin:2.18.0:set \
+            -DnewVersion="$RELEASE_VERSION" -DgenerateBackupPoms=false \
+            -DprocessDependencies=false -DprocessPlugins=false
+      - name: Build mod
+        run: mvn --batch-mode --no-transfer-progress clean package -DskipTests
+      - name: Stage mod artifact
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists." >&2
-            exit 1
-          fi
+          cp "target/triviathrone-infrastructure-${RELEASE_VERSION}-mod.jar" \
+            "triviathrone-infrastructure-${RELEASE_VERSION}-mod.jar"
+          sha256sum "triviathrone-infrastructure-${RELEASE_VERSION}-mod.jar" \
+            > "triviathrone-infrastructure-${RELEASE_VERSION}-mod.jar.sha256"
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: triviathrone-infrastructure-${{ needs.resolve-version.outputs.version }}
+          path: |
+            triviathrone-infrastructure-${{ needs.resolve-version.outputs.version }}-mod.jar
+            triviathrone-infrastructure-${{ needs.resolve-version.outputs.version }}-mod.jar.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [resolve-version, package]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-version.outputs.commit }}
+          fetch-depth: 0
+      - name: Set up Java
+        if: needs.resolve-version.outputs.update_pom == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Commit and tag release
+        if: needs.resolve-version.outputs.update_pom == 'true'
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mvn --batch-mode --no-transfer-progress \
+            org.codehaus.mojo:versions-maven-plugin:2.18.0:set \
+            -DnewVersion="$RELEASE_VERSION" -DgenerateBackupPoms=false \
+            -DprocessDependencies=false -DprocessPlugins=false
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pom.xml
-          git commit -m "Release TriviaThrone $VERSION"
-          git tag --annotate "$TAG" --message "TriviaThrone $VERSION"
-          git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "refs/tags/$TAG"
-
+          git add -- pom.xml
+          git commit -m "Release TriviaThrone Infrastructure $RELEASE_VERSION"
+          git tag --annotate "$RELEASE_TAG" --message "TriviaThrone Infrastructure $RELEASE_VERSION"
+          git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "refs/tags/${RELEASE_TAG}"
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_TAG: ${{ needs.resolve-version.outputs.tag }}
         run: |
-          gh release create "$TAG" \
-            "target/triviathrone-infrastructure-${VERSION}-mod.jar" \
-            --verify-tag \
-            --title "TriviaThrone Infrastructure $VERSION" \
-            --generate-notes
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* --verify-tag \
+              --title "TriviaThrone Infrastructure $RELEASE_VERSION" --generate-notes
+          fi
