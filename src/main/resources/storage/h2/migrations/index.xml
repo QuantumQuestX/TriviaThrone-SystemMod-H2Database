@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<migrations>
+    <migration src="p001__create-account-tables.sql"/>
+    <migration src="p002__enable-user-accounts.sql"/>
+    <migration src="p003__mark-default-admin.sql"/>
+    <migration src="p004__seed-default-admin.sql"/>
+    <migration src="p005__create-refresh-token-sessions.sql"/>
+</migrations>

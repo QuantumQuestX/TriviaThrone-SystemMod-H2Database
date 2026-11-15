@@ -1,3 +1,5 @@
+.mvn/
+
 # Maven build output
 /target/
 

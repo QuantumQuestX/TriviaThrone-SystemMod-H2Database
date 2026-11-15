@@ -1,54 +1,71 @@
-# TriviaThrone System Mod Template
+# TriviaThrone H2 Infrastructure
 
-This Maven project is a starting point for a system mod for the
-[TriviaThrone](https://github.com/QuantumQuestX/TriviaThrone) server. System
-mods are loaded during server startup and can provide infrastructure services,
-react to server lifecycle events, and maintain provider-specific data.
+H2-backed infrastructure provider for the
+[TriviaThrone](https://github.com/QuantumQuestX/TriviaThrone) server. The
+mod implements persistent user accounts, refresh-token sessions, and
+database migrations through the TriviaThrone system API.
 
-The included `ExampleSystemProvider` reads a `welcome-message` setting, appends
-it to `startup.log`, and logs each system event it receives.
+The provider is registered as `h2` and exposes these services:
+
+| Service                          | Implementation                    |
+|----------------------------------|-----------------------------------|
+| `IMigrationRunner`               | `H2MigrationRunner`               |
+| `IUserAccountRepository`         | `H2UserAccountRepository`         |
+| `IRefreshTokenSessionRepository` | `H2RefreshTokenSessionRepository` |
 
 ## Requirements
 
 - Java 25
-- Maven 3.9 or later
-- A TriviaThrone server compatible with system API 2.x
+- Maven 3.9+
+- TriviaThrone server and system API 2.x
 
-## Build and install
+The system API is supplied by the server and is kept as a `provided`
+dependency. It is not bundled into the mod.
 
-Build the mod JAR:
+## Build
 
-```sh
-mvn package
-```
-
-Copy `target/example-system-mod-1.0.0-SNAPSHOT.jar` to the server's system-mod
-directory, which defaults to `mods/system` relative to the server working
-directory:
+Build the mod and its shaded H2 artifact:
 
 ```sh
-cp target/example-system-mod-1.0.0-SNAPSHOT.jar /path/to/triviathrone/mods/system/
+mvn clean package
 ```
 
-Restart the server after installing or replacing a mod. Every JAR in the
-system-mod directory must expose at least one valid system provider; a failed
-provider prevents the server from starting.
+The installable artifact is:
 
-## Configure the example
+```text
+target/triviathrone-infrastructure-2.0.0-SNAPSHOT-mod.jar
+```
 
-TriviaThrone passes properties under
-`triviathrone.system.<provider-id>.` to the provider after removing that
-prefix. The example provider ID is `example-system`, so configure it in the
-server's `application.yaml` or another Spring configuration source:
+The Maven build also copies this file to `../mods/system` when that directory
+is available. To install manually, copy it to the server's configured system
+mod directory and restart the server.
+
+## Configuration
+
+TriviaThrone passes provider properties from
+`triviathrone.system.h2`. All properties are optional:
 
 ```yaml
 triviathrone:
   system:
-    example-system:
-      welcome-message: Hello from my system mod
+    h2:
+      jdbc-url: "jdbc:h2:file:./triviathrone-users;AUTO_SERVER=TRUE"
+      username: sa
+      password: ""
 ```
 
-The default mod and data directories can also be changed:
+Defaults:
+
+| Property   | Default                                              |
+|------------|------------------------------------------------------|
+| `jdbc-url` | `jdbc:h2:file:./triviathrone-users;AUTO_SERVER=TRUE` |
+| `username` | `sa`                                                 |
+| `password` | empty                                                |
+
+The H2 database is created by H2 when it does not already exist. Choose a
+location writable by the server process and protect the configured password.
+
+The server's system mod and data directories can be configured separately:
 
 ```yaml
 triviathrone:
@@ -58,36 +75,55 @@ triviathrone:
     data-directory: data/system
 ```
 
-Each provider receives its own data directory:
-`<system data directory>/<provider-id>`. For the example, the startup log is
-written to `data/system/example-system/startup.log`.
+## Database migrations
 
-## Turn this into your mod
+Migrations are stored in
+`src/main/resources/storage/h2/migrations`. Files must use the naming format
+`p<number>__<description>.sql`, for example:
 
-Update all of the following together:
+```text
+p006__add-example-column.sql
+```
 
-| Location                                                                 | Change                                                                                                               |
-|--------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
-| `pom.xml`                                                                | Set the group ID, artifact ID, version, and project name. Keep `triviathrone-system-api` as a `provided` dependency. |
-| `ExampleSystemProvider.java`                                             | Rename the package and class, then set a unique lowercase descriptor ID, mod version, and provider behavior.         |
-| `META-INF/services/quantumquest.triviathrone.api.system.ISystemProvider` | Replace the class name with the fully qualified name of your provider.                                               |
+The `process-classes` build step generates
+`storage/h2/migrations/index.xml` from the SQL files. At startup, migrations
+are applied in ascending version order and recorded in the migration state
+table. Already-applied versions are skipped.
 
-An `ISystemProvider` must have a public no-argument constructor, return a
-unique `SystemProviderDescriptor`, and declare compatibility with the server
-API. Keep `@SystemCompatibility(major = 2)` and use
-`SystemApi.CURRENT_VERSION` unless intentionally targeting a different
-compatible API version.
+Do not edit the generated `target/classes/storage/h2/migrations/index.xml`.
+Add a new numbered SQL file instead. Applied migrations must be treated as
+immutable because changing them can make existing databases inconsistent.
 
-Implement initialization in `initialize`, where services may be registered via
-`SystemServiceRegistry`. `onEvent` can be called concurrently, so its state
-handling must be thread-safe. It receives lobby-created/closed,
-player-joined/left, and game-started/ended events. Release resources in
-`close`; providers are closed in reverse initialization order.
+## Project structure
 
-The system API is supplied by the TriviaThrone server and must not be bundled
-in the mod. If the mod uses third-party libraries, package those dependencies
-with the mod artifact (for example, in a shaded JAR) so its dedicated class
-loader can resolve them.
+```text
+src/main/java/quantumquest/triviathrone/infrastructure/storage/
+  H2SystemProvider.java
+  H2UserAccountRepository.java
+  H2RefreshTokenSessionRepository.java
+  H2MigrationRunner.java
+  H2MigrationProvider.java
+  H2MigrationStateStore.java
+  H2SqlMigration.java
+src/main/resources/storage/h2/migrations/
+src/main/resources/META-INF/services/
+```
+
+`H2SystemProvider` creates the H2 connection pool, wires Spring JDBC
+transactions, runs migrations through the registered migration runner, and
+registers the account and refresh-token repositories. The pool is disposed
+when the provider is closed.
+
+## Tests
+
+Run the test suite with:
+
+```sh
+mvn test
+```
+
+Tests cover migration discovery, migration execution, provider registration,
+account persistence, and refresh-token persistence.
 
 ## License
 
