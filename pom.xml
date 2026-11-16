@@ -12,7 +12,7 @@
 
     <groupId>quantumquest.triviathrone</groupId>
     <artifactId>triviathrone-infrastructure</artifactId>
-    <version>1.0.1-SNAPSHOT</version>
+    <version>1.0.1</version>
 
     <name>H2 Infrastructure TriviaThrone System Mod</name>
 
