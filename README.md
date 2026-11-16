@@ -17,7 +17,7 @@ The provider is registered as `h2` and exposes these services:
 
 - Java 25
 - Maven 3.9+
-- TriviaThrone server and system API 2.1.0
+- TriviaThrone server and system API 2.1.1
 
 The system API is supplied by the server and is kept as a `provided`
 dependency. It is not bundled into the mod.
