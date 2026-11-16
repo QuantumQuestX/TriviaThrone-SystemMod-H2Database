@@ -17,7 +17,7 @@ The provider is registered as `h2` and exposes these services:
 
 - Java 25
 - Maven 3.9+
-- TriviaThrone server and system API 2.0.1
+- TriviaThrone server and system API 2.1.0
 
 The system API is supplied by the server and is kept as a `provided`
 dependency. It is not bundled into the mod.
@@ -33,7 +33,7 @@ mvn clean package
 The installable artifact is:
 
 ```text
-target/triviathrone-infrastructure-1.0.1-SNAPSHOT-mod.jar
+target/triviathrone-infrastructure-1.1.0-SNAPSHOT-mod.jar
 ```
 
 The Maven build also copies this file to `../mods/system` when that directory
