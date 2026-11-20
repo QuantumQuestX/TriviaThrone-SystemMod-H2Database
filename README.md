@@ -33,7 +33,7 @@ mvn clean package
 The installable artifact is:
 
 ```text
-target/triviathrone-infrastructure-1.1.0-SNAPSHOT-mod.jar
+target/triviathrone-infrastructure-1.2.0-SNAPSHOT-mod.jar
 ```
 
 The Maven build also copies this file to `../mods/system` when that directory
